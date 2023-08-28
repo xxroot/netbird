@@ -71,10 +71,8 @@ func (m *Manager) generateConfig() (rp.Config, error) {
 	cfg.SecretKey = m.ssk
 
 	cfg.Peers = []rp.PeerConfig{}
-	keyOutHandler := handlers.NewkeyoutHandler()
-	wireGuardHandler, _ := handlers.NewWireGuardHandler()
-
-	cfg.Handlers = []rp.Handler{keyOutHandler, wireGuardHandler}
+	handler := handlers.NewkeyoutHandler()
+	cfg.Handlers = []rp.Handler{handler}
 	var err error
 	for _, peer := range m.rpConnections {
 		pcfg := rp.PeerConfig{PublicKey: peer.rosenpassPubKey}
@@ -84,8 +82,7 @@ func (m *Manager) generateConfig() (rp.Config, error) {
 			return cfg, fmt.Errorf("failed to resolve peer endpoint address: %w", err)
 		}
 		cfg.Peers = append(cfg.Peers, pcfg)
-		_ = keyOutHandler.AddPeerKeyoutFile(pcfg.PID(), fmt.Sprintf("/tmp/rosenpass/%s", peer.wireGuardIP))
-		wireGuardHandler.AddPeer(pcfg.PID(), "wt0", rp.Key([]byte(peer.wireGuardPubKey)))
+		_ = handler.AddPeerKeyoutFile(pcfg.PID(), fmt.Sprintf("/tmp/rosenpass/%s", peerAddr))
 	}
 	return cfg, nil
 }
