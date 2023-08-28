@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	log "github.com/sirupsen/logrus"
-	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 	"log/slog"
 	"net"
 	"os"
@@ -86,11 +85,7 @@ func (m *Manager) generateConfig() (rp.Config, error) {
 		}
 		cfg.Peers = append(cfg.Peers, pcfg)
 		_ = keyOutHandler.AddPeerKeyoutFile(pcfg.PID(), fmt.Sprintf("/tmp/rosenpass/%s", peer.wireGuardIP))
-		key, err := wgtypes.ParseKey(peer.wireGuardPubKey)
-		if err != nil {
-			continue
-		}
-		wireGuardHandler.AddPeer(pcfg.PID(), "wt0", rp.Key(key))
+		wireGuardHandler.AddPeer(pcfg.PID(), "wt0", rp.Key([]byte(peer.wireGuardPubKey)))
 	}
 	return cfg, nil
 }
