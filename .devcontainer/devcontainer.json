@@ -1,0 +1,17 @@
+{
+	"name": "NetBird",
+	"dockerComposeFile": ["docker-compose.yml"],
+	"service": "management",
+    "shutdownAction": "stopCompose",
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+	"onCreateCommand": {
+		"management.json template": "envsubst <infrastructure_files/management.json.tmpl >.devcontainer/management.json",
+		"turnserver.conf template": "envsubst <infrastructure_files/turnserver.conf.tmpl >.devcontainer/turnserver.conf",
+		"management build": "go build -o management/management ./management"
+	},
+	"postAttachCommand": {
+		"run mgmt": 
+			"./management/management management --datadir . --config .devcontainer/management.json --log-level debug --log-file console --port 3001 --metrics-port 9001 --dns-domain=bla.com"
+	},
+	"forwardPorts": [3000, 8080, 9001, 10000]
+}

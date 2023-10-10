@@ -1,0 +1,50 @@
+version: '3'
+services:
+  management:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - 8080:3001
+      - 9001:9001
+    env_file:
+      - setup.env
+      - .env
+    volumes:
+      - ../..:/workspaces:cached
+    command: sleep infinity
+    depends_on:
+      - dashboard
+      - signal
+      - coturn
+
+  signal:
+    image: netbirdio/signal:latest
+    restart: unless-stopped
+    env_file:
+      - setup.env
+      - .env
+    ports:
+      - 10000:80
+
+  coturn:
+    image: coturn/coturn
+    restart: unless-stopped
+    domainname: localhost
+    env_file:
+      - setup.env
+      - .env
+    volumes:
+      - .devcontainer/turnserver.conf:/etc/turnserver.conf:ro
+    network_mode: host
+    command:
+      - -c /etc/turnserver.conf
+  
+  dashboard:
+    image: wiretrustee/dashboard:main
+    restart: unless-stopped
+    env_file:
+      - setup.env
+      - .env
+    ports:
+      - 3000:80
