@@ -54,7 +54,7 @@ func existsInRouteTable(prefix netip.Prefix) (bool, error) {
 
 		dst, err := toIPAddr(m.Addrs[0])
 		if err != nil {
-			return true, fmt.Errorf("unexpected RIB destination: %v", err)
+			return true, fmt.Errorf("unexpected RIB Destination: %v", err)
 		}
 
 		mask, _ := toIPAddr(m.Addrs[2])
