@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"sync"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
@@ -25,8 +24,6 @@ const (
 
 // some presets for building nftable rules
 var (
-	existsRuleForwarding bool
-
 	zeroXor = binaryutil.NativeEndian.PutUint32(0)
 
 	exprAllowRelatedEstablished = []expr.Any{
@@ -61,126 +58,88 @@ var (
 )
 
 type router struct {
-	ctx                 context.Context
-	stop                context.CancelFunc
-	conn                *nftables.Conn
-	table               *nftables.Table
-	chains              map[string]*nftables.Chain
+	ctx         context.Context
+	stop        context.CancelFunc
+	conn        *nftables.Conn
+	workTable   *nftables.Table
+	filterTable *nftables.Table
+	chains      map[string]*nftables.Chain
+	// rules is useful to avoid duplicates and to get missing attributes that we don't have when adding new rules
 	rules               map[string]*nftables.Rule
-	filterTable         *nftables.Table
 	defaultForwardRules []*nftables.Rule
-	mux                 sync.Mutex
 }
 
-func newRouter(parentCtx context.Context) *router {
+func newRouter(parentCtx context.Context, workTable *nftables.Table) (*router, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 
-	return &router{
+	r := &router{
 		ctx:                 ctx,
 		stop:                cancel,
 		conn:                &nftables.Conn{},
+		workTable:           workTable,
 		chains:              make(map[string]*nftables.Chain),
 		rules:               make(map[string]*nftables.Rule),
 		defaultForwardRules: make([]*nftables.Rule, 2),
 	}
+
+	err := r.createContainers()
+	if err != nil {
+		log.Errorf("failed to create containers for route: %s", err)
+	}
+	return r, err
 }
 
-// CleanRoutingRules cleans existing nftables rules from the system
-func (r *router) CleanRoutingRules() {
-	r.mux.Lock()
-	defer r.mux.Unlock()
-	log.Debug("flushing tables")
-	if r.table != nil {
-		r.conn.FlushTable(r.table)
+// ResetForwardRules cleans existing nftables rules from the system
+func (r *router) ResetForwardRules() error {
+	err := r.eraseDefaultForwardRule()
+	if err != nil {
+		return fmt.Errorf("failed to delete forward rule: %s", err)
 	}
-
-	if r.defaultForwardRules[0] != nil {
-		err := r.eraseDefaultForwardRule()
-		if err != nil {
-			log.Errorf("failed to delete forward rule: %s", err)
-		}
+	err = r.conn.Flush()
+	if err != nil {
+		return fmt.Errorf("failed to flush delete forward rule operation: %s", r.conn.Flush())
 	}
-	log.Debugf("flushing tables result in: %v error", r.conn.Flush())
+	return nil
 }
 
-// RestoreOrCreateContainers restores existing nftables containers (tables and chains)
-// if they don't exist, we create them
-func (r *router) RestoreOrCreateContainers() error {
-	r.mux.Lock()
-	defer r.mux.Unlock()
-
-	if r.table != nil {
-		log.Debugf("nftables: containers already restored, skipping")
-		return nil
-	}
-
-	tables, err := r.conn.ListTables()
+func (r *router) createContainers() error {
+	tables, err := r.conn.ListTablesOfFamily(nftables.TableFamilyIPv4)
 	if err != nil {
 		return fmt.Errorf("nftables: unable to list tables: %v", err)
 	}
 
 	for _, table := range tables {
-		if table.Family != nftables.TableFamilyIPv4 {
-			continue
-		}
 		if table.Name == "filter" {
 			log.Debugf("nftables: found 'filter' table")
 			r.filterTable = table
-			continue
-		}
-		if table.Name == tableName {
-			log.Debugf("nftables: found '%s' table", tableName)
-			r.table = table
-			continue
+			break
 		}
 	}
 
-	if r.table == nil {
-		r.table = r.conn.AddTable(&nftables.Table{
-			Name:   tableName,
-			Family: nftables.TableFamilyIPv4,
-		})
-	}
+	fwdChain := r.conn.AddChain(&nftables.Chain{
+		Name:     chainNameRouteingFw,
+		Table:    r.workTable,
+		Hooknum:  nftables.ChainHookForward,
+		Priority: nftables.ChainPriorityNATDest + 1,
+		Type:     nftables.ChainTypeFilter,
+	})
 
-	chains, err := r.conn.ListChains()
-	if err != nil {
-		return fmt.Errorf("nftables: unable to list chains: %v", err)
-	}
+	_ = r.conn.AddRule(&nftables.Rule{
+		Table:    r.workTable,
+		Chain:    fwdChain,
+		Exprs:    exprAllowRelatedEstablished,
+		UserData: []byte(manager.Ipv4Forwarding),
+	})
+	r.chains[chainNameRouteingFw] = fwdChain
 
-	r.chains = make(map[string]*nftables.Chain)
+	r.chains[chainNameRoutingNat] = r.conn.AddChain(&nftables.Chain{
+		Name:     chainNameRoutingNat,
+		Table:    r.workTable,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource - 1,
+		Type:     nftables.ChainTypeNAT,
+	})
 
-	for _, chain := range chains {
-		if chain.Table.Name == tableName && chain.Table.Family == nftables.TableFamilyIPv4 {
-			r.chains[chain.Name] = chain
-		}
-	}
-
-	if _, found := r.chains[chainNameRouteingFw]; !found {
-		r.chains[chainNameRouteingFw] = r.conn.AddChain(&nftables.Chain{
-			Name:     chainNameRouteingFw,
-			Table:    r.table,
-			Hooknum:  nftables.ChainHookForward,
-			Priority: nftables.ChainPriorityNATDest + 1,
-			Type:     nftables.ChainTypeFilter,
-		})
-	}
-
-	if _, found := r.chains[chainNameRoutingNat]; !found {
-		r.chains[chainNameRoutingNat] = r.conn.AddChain(&nftables.Chain{
-			Name:     chainNameRoutingNat,
-			Table:    r.table,
-			Hooknum:  nftables.ChainHookPostrouting,
-			Priority: nftables.ChainPriorityNATSource - 1,
-			Type:     nftables.ChainTypeNAT,
-		})
-	}
-
-	err = r.refreshRulesMap()
-	if err != nil {
-		return err
-	}
-
-	r.checkOrCreateDefaultForwardingRules()
 	err = r.conn.Flush()
 	if err != nil {
 		return fmt.Errorf("nftables: unable to initialize table: %v", err)
@@ -188,63 +147,71 @@ func (r *router) RestoreOrCreateContainers() error {
 	return nil
 }
 
-// refreshRulesMap refreshes the rule map with the latest rules. this is useful to avoid
-// duplicates and to get missing attributes that we don't have when adding new rules
-func (r *router) refreshRulesMap() error {
-	for _, chain := range r.chains {
-		rules, err := r.conn.GetRules(chain.Table, chain)
-		if err != nil {
-			return fmt.Errorf("nftables: unable to list rules: %v", err)
-		}
-		for _, rule := range rules {
-			if len(rule.UserData) > 0 {
-				r.rules[string(rule.UserData)] = rule
-			}
-		}
+// InsertRoutingRules inserts a nftable rule pair to the forwarding chain and if enabled, to the nat chain
+func (r *router) InsertRoutingRules(pair manager.RouterPair) error {
+	err := r.insertRoutingRule(manager.ForwardingFormat, chainNameRouteingFw, pair, false)
+	if err != nil {
+		return err
 	}
-	return nil
-}
-
-func (r *router) eraseDefaultForwardRule() error {
-	if r.defaultForwardRules[0] == nil {
-		return nil
-	}
-
-	err := r.refreshDefaultForwardRule()
+	err = r.insertRoutingRule(manager.InForwardingFormat, chainNameRouteingFw, manager.GetInPair(pair), false)
 	if err != nil {
 		return err
 	}
 
-	for i, rule := range r.defaultForwardRules {
-		err = r.conn.DelRule(rule)
+	if pair.Masquerade {
+		err = r.insertRoutingRule(manager.NatFormat, chainNameRoutingNat, pair, true)
 		if err != nil {
-			log.Errorf("failed to delete forward rule (%d): %s", i, err)
+			return err
 		}
-		r.defaultForwardRules[i] = nil
+		err = r.insertRoutingRule(manager.InNatFormat, chainNameRoutingNat, manager.GetInPair(pair), true)
+		if err != nil {
+			return err
+		}
+	}
+
+	if r.defaultForwardRules[0] == nil && r.filterTable != nil {
+		err = r.acceptForwardRule(pair.Source)
+		if err != nil {
+			log.Errorf("unable to create default forward rule: %s", err)
+		}
+		log.Debugf("default accept forward rule added")
+	}
+
+	err = r.conn.Flush()
+	if err != nil {
+		return fmt.Errorf("nftables: unable to insert rules for %s: %v", pair.Destination, err)
 	}
 	return nil
 }
 
-func (r *router) refreshDefaultForwardRule() error {
-	rules, err := r.conn.GetRules(r.defaultForwardRules[0].Table, r.defaultForwardRules[0].Chain)
-	if err != nil {
-		return fmt.Errorf("unable to list rules in forward chain: %s", err)
+// insertRoutingRule inserts a nftable rule to the conn client flush queue
+func (r *router) insertRoutingRule(format, chainName string, pair manager.RouterPair, isNat bool) error {
+	sourceExp := generateCIDRMatcherExpressions(true, pair.Source)
+	destExp := generateCIDRMatcherExpressions(false, pair.Destination)
+
+	var expression []expr.Any
+	if isNat {
+		expression = append(sourceExp, append(destExp, &expr.Counter{}, &expr.Masq{})...)
+	} else {
+		expression = append(sourceExp, append(destExp, exprCounterAccept...)...)
 	}
 
-	found := false
-	for i, dr := range r.defaultForwardRules {
-		for _, rule := range rules {
-			if string(rule.UserData) == string(dr.UserData) {
-				r.defaultForwardRules[i] = rule
-				found = true
-				break
-			}
+	ruleKey := manager.GenKey(format, pair.ID)
+
+	_, exists := r.rules[ruleKey]
+	if exists {
+		err := r.removeRoutingRule(format, pair)
+		if err != nil {
+			return err
 		}
 	}
-	if !found {
-		return fmt.Errorf("unable to find forward accept rule")
-	}
 
+	r.rules[ruleKey] = r.conn.InsertRule(&nftables.Rule{
+		Table:    r.workTable,
+		Chain:    r.chains[chainName],
+		Exprs:    expression,
+		UserData: []byte(ruleKey),
+	})
 	return nil
 }
 
@@ -296,108 +263,9 @@ func (r *router) acceptForwardRule(sourceNetwork string) error {
 	return nil
 }
 
-// checkOrCreateDefaultForwardingRules checks if the default forwarding rules are enabled
-func (r *router) checkOrCreateDefaultForwardingRules() {
-	if existsRuleForwarding {
-		return
-	}
-
-	_ = r.conn.AddRule(&nftables.Rule{
-		Table:    r.table,
-		Chain:    r.chains[chainNameRouteingFw],
-		Exprs:    exprAllowRelatedEstablished,
-		UserData: []byte(manager.Ipv4Forwarding),
-	})
-	existsRuleForwarding = true
-}
-
-// InsertRoutingRules inserts a nftable rule pair to the forwarding chain and if enabled, to the nat chain
-func (r *router) InsertRoutingRules(pair manager.RouterPair) error {
-	r.mux.Lock()
-	defer r.mux.Unlock()
-
-	err := r.refreshRulesMap()
-	if err != nil {
-		return err
-	}
-
-	err = r.insertRoutingRule(manager.ForwardingFormat, chainNameRouteingFw, pair, false)
-	if err != nil {
-		return err
-	}
-	err = r.insertRoutingRule(manager.InForwardingFormat, chainNameRouteingFw, manager.GetInPair(pair), false)
-	if err != nil {
-		return err
-	}
-
-	if pair.Masquerade {
-		err = r.insertRoutingRule(manager.NatFormat, chainNameRoutingNat, pair, true)
-		if err != nil {
-			return err
-		}
-		err = r.insertRoutingRule(manager.InNatFormat, chainNameRoutingNat, manager.GetInPair(pair), true)
-		if err != nil {
-			return err
-		}
-	}
-
-	if r.defaultForwardRules[0] == nil && r.filterTable != nil {
-		err = r.acceptForwardRule(pair.Source)
-		if err != nil {
-			log.Errorf("unable to create default forward rule: %s", err)
-		}
-		log.Debugf("default accept forward rule added")
-	}
-
-	err = r.conn.Flush()
-	if err != nil {
-		return fmt.Errorf("nftables: unable to insert rules for %s: %v", pair.Destination, err)
-	}
-	return nil
-}
-
-// insertRoutingRule inserts a nftable rule to the conn client flush queue
-func (r *router) insertRoutingRule(format, chain string, pair manager.RouterPair, isNat bool) error {
-	sourceExp := generateCIDRMatcherExpressions(true, pair.Source)
-	destExp := generateCIDRMatcherExpressions(false, pair.Destination)
-
-	var expression []expr.Any
-	if isNat {
-		expression = append(sourceExp, append(destExp, &expr.Counter{}, &expr.Masq{})...)
-	} else {
-		expression = append(sourceExp, append(destExp, exprCounterAccept...)...)
-	}
-
-	ruleKey := manager.GenKey(format, pair.ID)
-
-	_, exists := r.rules[ruleKey]
-	if exists {
-		err := r.removeRoutingRule(format, pair)
-		if err != nil {
-			return err
-		}
-	}
-
-	r.rules[ruleKey] = r.conn.InsertRule(&nftables.Rule{
-		Table:    r.table,
-		Chain:    r.chains[chain],
-		Exprs:    expression,
-		UserData: []byte(ruleKey),
-	})
-	return nil
-}
-
 // RemoveRoutingRules removes a nftable rule pair from forwarding and nat chains
 func (r *router) RemoveRoutingRules(pair manager.RouterPair) error {
-	r.mux.Lock()
-	defer r.mux.Unlock()
-
-	err := r.refreshRulesMap()
-	if err != nil {
-		return err
-	}
-
-	err = r.removeRoutingRule(manager.ForwardingFormat, pair)
+	err := r.removeRoutingRule(manager.ForwardingFormat, pair)
 	if err != nil {
 		return err
 	}
@@ -452,6 +320,49 @@ func (r *router) removeRoutingRule(format string, pair manager.RouterPair) error
 
 		delete(r.rules, ruleKey)
 	}
+	return nil
+}
+
+func (r *router) eraseDefaultForwardRule() error {
+	if r.defaultForwardRules[0] == nil {
+		return nil
+	}
+
+	err := r.refreshDefaultForwardRule()
+	if err != nil {
+		return err
+	}
+
+	for i, rule := range r.defaultForwardRules {
+		err = r.conn.DelRule(rule)
+		if err != nil {
+			log.Errorf("failed to delete forward rule (%d): %s", i, err)
+		}
+		r.defaultForwardRules[i] = nil
+	}
+	return nil
+}
+
+func (r *router) refreshDefaultForwardRule() error {
+	rules, err := r.conn.GetRules(r.defaultForwardRules[0].Table, r.defaultForwardRules[0].Chain)
+	if err != nil {
+		return fmt.Errorf("unable to list rules in forward chain: %s", err)
+	}
+
+	found := false
+	for i, dr := range r.defaultForwardRules {
+		for _, rule := range rules {
+			if string(rule.UserData) == string(dr.UserData) {
+				r.defaultForwardRules[i] = rule
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		return fmt.Errorf("unable to find forward accept rule")
+	}
+
 	return nil
 }
 
