@@ -7,42 +7,52 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/exp/slices"
+
+	nbpeer "github.com/netbirdio/netbird/management/server/peer"
 )
 
 func TestAccount_getPeersByPolicy(t *testing.T) {
 	account := &Account{
-		Peers: map[string]*Peer{
+		Peers: map[string]*nbpeer.Peer{
 			"peerA": {
-				ID: "peerA",
-				IP: net.ParseIP("100.65.14.88"),
+				ID:     "peerA",
+				IP:     net.ParseIP("100.65.14.88"),
+				Status: &nbpeer.PeerStatus{},
 			},
 			"peerB": {
-				ID: "peerB",
-				IP: net.ParseIP("100.65.80.39"),
+				ID:     "peerB",
+				IP:     net.ParseIP("100.65.80.39"),
+				Status: &nbpeer.PeerStatus{},
 			},
 			"peerC": {
-				ID: "peerC",
-				IP: net.ParseIP("100.65.254.139"),
+				ID:     "peerC",
+				IP:     net.ParseIP("100.65.254.139"),
+				Status: &nbpeer.PeerStatus{},
 			},
 			"peerD": {
-				ID: "peerD",
-				IP: net.ParseIP("100.65.62.5"),
+				ID:     "peerD",
+				IP:     net.ParseIP("100.65.62.5"),
+				Status: &nbpeer.PeerStatus{},
 			},
 			"peerE": {
-				ID: "peerE",
-				IP: net.ParseIP("100.65.32.206"),
+				ID:     "peerE",
+				IP:     net.ParseIP("100.65.32.206"),
+				Status: &nbpeer.PeerStatus{},
 			},
 			"peerF": {
-				ID: "peerF",
-				IP: net.ParseIP("100.65.250.202"),
+				ID:     "peerF",
+				IP:     net.ParseIP("100.65.250.202"),
+				Status: &nbpeer.PeerStatus{},
 			},
 			"peerG": {
-				ID: "peerG",
-				IP: net.ParseIP("100.65.13.186"),
+				ID:     "peerG",
+				IP:     net.ParseIP("100.65.13.186"),
+				Status: &nbpeer.PeerStatus{},
 			},
 			"peerH": {
-				ID: "peerH",
-				IP: net.ParseIP("100.65.29.55"),
+				ID:     "peerH",
+				IP:     net.ParseIP("100.65.29.55"),
+				Status: &nbpeer.PeerStatus{},
 			},
 		},
 		Groups: map[string]*Group{
@@ -255,18 +265,21 @@ func TestAccount_getPeersByPolicy(t *testing.T) {
 
 func TestAccount_getPeersByPolicyDirect(t *testing.T) {
 	account := &Account{
-		Peers: map[string]*Peer{
+		Peers: map[string]*nbpeer.Peer{
 			"peerA": {
-				ID: "peerA",
-				IP: net.ParseIP("100.65.14.88"),
+				ID:     "peerA",
+				IP:     net.ParseIP("100.65.14.88"),
+				Status: &nbpeer.PeerStatus{},
 			},
 			"peerB": {
-				ID: "peerB",
-				IP: net.ParseIP("100.65.80.39"),
+				ID:     "peerB",
+				IP:     net.ParseIP("100.65.80.39"),
+				Status: &nbpeer.PeerStatus{},
 			},
 			"peerC": {
-				ID: "peerC",
-				IP: net.ParseIP("100.65.254.139"),
+				ID:     "peerC",
+				IP:     net.ParseIP("100.65.254.139"),
+				Status: &nbpeer.PeerStatus{},
 			},
 		},
 		Groups: map[string]*Group{
@@ -430,8 +443,19 @@ func TestAccount_getPeersByPolicyDirect(t *testing.T) {
 	})
 }
 
-func sortFunc() func(a *FirewallRule, b *FirewallRule) bool {
-	return func(a, b *FirewallRule) bool {
-		return a.PeerIP+fmt.Sprintf("%d", a.Direction) < b.PeerIP+fmt.Sprintf("%d", b.Direction)
+func sortFunc() func(a *FirewallRule, b *FirewallRule) int {
+	return func(a, b *FirewallRule) int {
+		// Concatenate PeerIP and Direction as string for comparison
+		aStr := a.PeerIP + fmt.Sprintf("%d", a.Direction)
+		bStr := b.PeerIP + fmt.Sprintf("%d", b.Direction)
+
+		// Compare the concatenated strings
+		if aStr < bStr {
+			return -1 // a is less than b
+		}
+		if aStr > bStr {
+			return 1 // a is greater than b
+		}
+		return 0 // a is equal to b
 	}
 }

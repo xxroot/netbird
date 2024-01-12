@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/netbirdio/netbird/client/internal/auth"
+	"github.com/netbirdio/netbird/client/system"
 
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
@@ -93,7 +94,7 @@ func (s *Server) Start() error {
 	}
 
 	// if configuration exists, we just start connections.
-	config, _ = internal.UpdateOldManagementPort(ctx, config, s.latestConfigInput.ConfigPath)
+	config, _ = internal.UpdateOldManagementURL(ctx, config, s.latestConfigInput.ConfigPath)
 
 	s.config = config
 
@@ -181,6 +182,16 @@ func (s *Server) Login(callerCtx context.Context, msg *proto.LoginRequest) (*pro
 		s.latestConfigInput.CustomDNSAddress = []byte{}
 	}
 
+	if msg.Hostname != "" {
+		// nolint
+		ctx = context.WithValue(ctx, system.DeviceNameCtxKey, msg.Hostname)
+	}
+
+	if msg.RosenpassEnabled != nil {
+		inputConfig.RosenpassEnabled = msg.RosenpassEnabled
+		s.latestConfigInput.RosenpassEnabled = msg.RosenpassEnabled
+	}
+
 	s.mutex.Unlock()
 
 	inputConfig.PreSharedKey = &msg.PreSharedKey
@@ -191,7 +202,7 @@ func (s *Server) Login(callerCtx context.Context, msg *proto.LoginRequest) (*pro
 	}
 
 	if msg.ManagementUrl == "" {
-		config, _ = internal.UpdateOldManagementPort(ctx, config, s.latestConfigInput.ConfigPath)
+		config, _ = internal.UpdateOldManagementURL(ctx, config, s.latestConfigInput.ConfigPath)
 		s.config = config
 		s.latestConfigInput.ManagementURL = config.ManagementURL.String()
 	}
@@ -273,6 +284,11 @@ func (s *Server) WaitSSOLogin(callerCtx context.Context, msg *proto.WaitSSOLogin
 	md, ok := metadata.FromIncomingContext(callerCtx)
 	if ok {
 		ctx = metadata.NewOutgoingContext(ctx, md)
+	}
+
+	if msg.Hostname != "" {
+		// nolint
+		ctx = context.WithValue(ctx, system.DeviceNameCtxKey, msg.Hostname)
 	}
 
 	s.actCancel = cancel

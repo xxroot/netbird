@@ -51,7 +51,7 @@ var loginCmd = &cobra.Command{
 				AdminURL:      adminURL,
 				ConfigPath:    configPath,
 			}
-			if preSharedKey != "" {
+			if rootCmd.PersistentFlags().Changed(preSharedKeyFlag) {
 				ic.PreSharedKey = &preSharedKey
 			}
 
@@ -60,7 +60,7 @@ var loginCmd = &cobra.Command{
 				return fmt.Errorf("get config file: %v", err)
 			}
 
-			config, _ = internal.UpdateOldManagementPort(ctx, config, configPath)
+			config, _ = internal.UpdateOldManagementURL(ctx, config, configPath)
 
 			err = foregroundLogin(ctx, cmd, config, setupKey)
 			if err != nil {
@@ -85,6 +85,7 @@ var loginCmd = &cobra.Command{
 			PreSharedKey:         preSharedKey,
 			ManagementUrl:        managementURL,
 			IsLinuxDesktopClient: isLinuxRunningDesktop(),
+			Hostname:             hostName,
 		}
 
 		var loginErr error
@@ -114,7 +115,7 @@ var loginCmd = &cobra.Command{
 		if loginResp.NeedsSSOLogin {
 			openURL(cmd, loginResp.VerificationURIComplete, loginResp.UserCode)
 
-			_, err = client.WaitSSOLogin(ctx, &proto.WaitSSOLoginRequest{UserCode: loginResp.UserCode})
+			_, err = client.WaitSSOLogin(ctx, &proto.WaitSSOLoginRequest{UserCode: loginResp.UserCode, Hostname: hostName})
 			if err != nil {
 				return fmt.Errorf("waiting sso login failed with: %v", err)
 			}
@@ -150,13 +151,21 @@ func foregroundLogin(ctx context.Context, cmd *cobra.Command, config *internal.C
 		jwtToken = tokenInfo.GetTokenToUse()
 	}
 
+	var lastError error
+
 	err = WithBackOff(func() error {
 		err := internal.Login(ctx, config, setupKey, jwtToken)
 		if s, ok := gstatus.FromError(err); ok && (s.Code() == codes.InvalidArgument || s.Code() == codes.PermissionDenied) {
+			lastError = err
 			return nil
 		}
 		return err
 	})
+
+	if lastError != nil {
+		return fmt.Errorf("login failed: %v", lastError)
+	}
+
 	if err != nil {
 		return fmt.Errorf("backoff cycle failed: %v", err)
 	}

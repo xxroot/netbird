@@ -20,7 +20,7 @@ on:
       - 'client/ui/**'
 
 env:
-  SIGN_PIPE_VER: "v0.0.10"
+  SIGN_PIPE_VER: "v0.0.11"
   GORELEASER_VER: "v1.14.1"
 
 concurrency:
@@ -44,15 +44,18 @@ jobs:
         name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.20"
+          go-version: "1.21"
+          cache: false
       -
         name: Cache Go modules
         uses: actions/cache@v3
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-releaser-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-go-releaser-
       -
         name: Install modules
         run: go mod tidy
@@ -117,14 +120,17 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.20"
+          go-version: "1.21"
+          cache: false
       - name: Cache Go modules
         uses: actions/cache@v3
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-ui-go-${{ hashFiles('**/go.sum') }}
+          path: | 
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-ui-go-releaser-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-ui-go-
+            ${{ runner.os }}-ui-go-releaser-
 
       - name: Install modules
         run: go mod tidy
@@ -169,15 +175,18 @@ jobs:
         name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.20"
+          go-version: "1.21"
+          cache: false
       -
         name: Cache Go modules
         uses: actions/cache@v3
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-ui-go-${{ hashFiles('**/go.sum') }}
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-ui-go-releaser-darwin-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-ui-go-
+            ${{ runner.os }}-ui-go-releaser-darwin-
       -
         name: Install modules
         run: go mod tidy

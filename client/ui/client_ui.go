@@ -563,8 +563,8 @@ func (s *serviceClient) getSrvClient(timeout time.Duration) (proto.DaemonService
 
 // getSrvConfig from the service to show it in the settings window.
 func (s *serviceClient) getSrvConfig() {
-	s.managementURL = "https://api.wiretrustee.com:33073"
-	s.adminURL = "https://app.netbird.io"
+	s.managementURL = internal.DefaultManagementURL
+	s.adminURL = internal.DefaultAdminURL
 
 	conn, err := s.getSrvClient(failFastTimeout)
 	if err != nil {
@@ -634,5 +634,5 @@ func checkPIDFile() error {
 		}
 	}
 
-	return os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0o664)
+	return os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0o664) //nolint:gosec
 }
